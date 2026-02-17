@@ -29,9 +29,10 @@ func main() {
 	if baseDir == "" {
 		baseDir = "/tmp/confighub-custom-bridge"
 	}
-	log.Printf("[INFO] Using base directory: %s", baseDir)
+	saveOnly := os.Getenv("SAVE_ONLY") != ""
+	log.Printf("[INFO] Using base directory: %s (save-only: %v)", baseDir, saveOnly)
 
-	customBridge, err := NewCustomKubernetesBridge("custom-kubernetes-bridge", baseDir)
+	customBridge, err := NewCustomKubernetesBridge("custom-kubernetes-bridge", baseDir, saveOnly)
 	if err != nil {
 		log.Fatalf("Failed to create custom bridge: %v", err)
 	}

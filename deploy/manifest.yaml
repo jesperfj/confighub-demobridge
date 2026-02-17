@@ -1,0 +1,70 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: confighub
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: custombridge-credentials
+  namespace: confighub
+stringData:
+  CONFIGHUB_WORKER_ID: "REPLACE_ME"
+  CONFIGHUB_WORKER_SECRET: "REPLACE_ME"
+  CONFIGHUB_URL: "https://app.confighub.com"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: custombridge
+  namespace: confighub
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: custombridge
+subjects:
+  - kind: ServiceAccount
+    name: custombridge
+    namespace: confighub
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  # The bridge needs broad access to apply/destroy/read Kubernetes resources.
+  # Scope this down to a custom ClusterRole if you want tighter permissions.
+  name: cluster-admin
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custombridge
+  namespace: confighub
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: custombridge
+  template:
+    metadata:
+      labels:
+        app: custombridge
+    spec:
+      serviceAccountName: custombridge
+      containers:
+        - name: custombridge
+          image: ghcr.io/confighub/confighub-demobridge:latest
+          envFrom:
+            - secretRef:
+                name: custombridge-credentials
+          env:
+            - name: CUSTOM_BRIDGE_DIR
+              value: /data
+            # Uncomment to enable save-only mode (skip Kubernetes operations):
+            # - name: SAVE_ONLY
+            #   value: "true"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}

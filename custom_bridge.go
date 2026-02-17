@@ -18,11 +18,13 @@ import (
 type CustomKubernetesBridge struct {
 	name             string
 	baseDir          string
+	saveOnly         bool
 	kubernetesBridge *impl.KubernetesBridgeWorker
 }
 
-// NewCustomKubernetesBridge creates a new CustomKubernetesBridge instance
-func NewCustomKubernetesBridge(name, baseDir string) (*CustomKubernetesBridge, error) {
+// NewCustomKubernetesBridge creates a new CustomKubernetesBridge instance.
+// If saveOnly is true, the bridge only performs file operations and does not interact with Kubernetes.
+func NewCustomKubernetesBridge(name, baseDir string, saveOnly bool) (*CustomKubernetesBridge, error) {
 	if baseDir == "" {
 		baseDir = "/tmp/confighub-custom-bridge"
 	}
@@ -37,8 +39,14 @@ func NewCustomKubernetesBridge(name, baseDir string) (*CustomKubernetesBridge, e
 	return &CustomKubernetesBridge{
 		name:             name,
 		baseDir:          baseDir,
+		saveOnly:         saveOnly,
 		kubernetesBridge: kubernetesBridge,
 	}, nil
+}
+
+// ID returns the bridge worker identifier, delegating to the underlying Kubernetes bridge
+func (cb *CustomKubernetesBridge) ID() api.BridgeWorkerID {
+	return cb.kubernetesBridge.ID()
 }
 
 // Info returns information about the bridge's capabilities
@@ -67,29 +75,30 @@ func (cb *CustomKubernetesBridge) Apply(ctx api.BridgeContext, payload api.Bridg
 		return err
 	}
 
-	// Delegate to the underlying Kubernetes bridge
-	err := cb.kubernetesBridge.Apply(ctx, payload)
-	if err != nil {
-		// Send error status
-		endedAt := time.Now()
-		ctx.SendStatus(&api.ActionResult{
-			UnitID:            payload.UnitID,
-			SpaceID:           payload.SpaceID,
-			QueuedOperationID: payload.QueuedOperationID,
-			ActionResultBaseMeta: api.ActionResultBaseMeta{
-				Action:       api.ActionApply,
-				Result:       api.ActionResultApplyFailed,
-				Status:       api.ActionStatusFailed,
-				Message:      fmt.Sprintf("Apply failed: %v", err),
-				StartedAt:    startTime,
-				TerminatedAt: &endedAt,
-			},
-		})
-		return err
+	// Delegate to the underlying Kubernetes bridge (unless save-only mode)
+	if !cb.saveOnly {
+		err := cb.kubernetesBridge.Apply(ctx, payload)
+		if err != nil {
+			endedAt := time.Now()
+			ctx.SendStatus(&api.ActionResult{
+				UnitID:            payload.UnitID,
+				SpaceID:           payload.SpaceID,
+				QueuedOperationID: payload.QueuedOperationID,
+				ActionResultBaseMeta: api.ActionResultBaseMeta{
+					Action:       api.ActionApply,
+					Result:       api.ActionResultApplyFailed,
+					Status:       api.ActionStatusFailed,
+					Message:      fmt.Sprintf("Apply failed: %v", err),
+					StartedAt:    startTime,
+					TerminatedAt: &endedAt,
+				},
+			})
+			return err
+		}
 	}
 
 	// Save config unit data and metadata to files
-	err = cb.saveConfigUnit(payload)
+	err := cb.saveConfigUnit(payload)
 	if err != nil {
 		// Send error status
 		endedAt := time.Now()
@@ -128,11 +137,17 @@ func (cb *CustomKubernetesBridge) Apply(ctx api.BridgeContext, payload api.Bridg
 
 // Refresh handles the refresh operation by delegating to the Kubernetes bridge
 func (cb *CustomKubernetesBridge) Refresh(ctx api.BridgeContext, payload api.BridgePayload) error {
+	if cb.saveOnly {
+		return nil
+	}
 	return cb.kubernetesBridge.Refresh(ctx, payload)
 }
 
 // Import handles the import operation by delegating to the Kubernetes bridge
 func (cb *CustomKubernetesBridge) Import(ctx api.BridgeContext, payload api.BridgePayload) error {
+	if cb.saveOnly {
+		return nil
+	}
 	return cb.kubernetesBridge.Import(ctx, payload)
 }
 
@@ -145,7 +160,7 @@ func (cb *CustomKubernetesBridge) Destroy(ctx api.BridgeContext, payload api.Bri
 		UnitID:            payload.UnitID,
 		SpaceID:           payload.SpaceID,
 		QueuedOperationID: payload.QueuedOperationID,
-		ActionResultBaseMeta: api.ActionResultMeta{
+		ActionResultBaseMeta: api.ActionResultBaseMeta{
 			Action:    api.ActionDestroy,
 			Result:    api.ActionResultNone,
 			Status:    api.ActionStatusProgressing,
@@ -156,29 +171,30 @@ func (cb *CustomKubernetesBridge) Destroy(ctx api.BridgeContext, payload api.Bri
 		return err
 	}
 
-	// Delegate to the underlying Kubernetes bridge
-	err := cb.kubernetesBridge.Destroy(ctx, payload)
-	if err != nil {
-		// Send error status
-		endedAt := time.Now()
-		ctx.SendStatus(&api.ActionResult{
-			UnitID:            payload.UnitID,
-			SpaceID:           payload.SpaceID,
-			QueuedOperationID: payload.QueuedOperationID,
-			ActionResultBaseMeta: api.ActionResultBaseMeta{
-				Action:       api.ActionDestroy,
-				Result:       api.ActionResultDestroyFailed,
-				Status:       api.ActionStatusFailed,
-				Message:      fmt.Sprintf("Destroy failed: %v", err),
-				StartedAt:    startTime,
-				TerminatedAt: &endedAt,
-			},
-		})
-		return err
+	// Delegate to the underlying Kubernetes bridge (unless save-only mode)
+	if !cb.saveOnly {
+		err := cb.kubernetesBridge.Destroy(ctx, payload)
+		if err != nil {
+			endedAt := time.Now()
+			ctx.SendStatus(&api.ActionResult{
+				UnitID:            payload.UnitID,
+				SpaceID:           payload.SpaceID,
+				QueuedOperationID: payload.QueuedOperationID,
+				ActionResultBaseMeta: api.ActionResultBaseMeta{
+					Action:       api.ActionDestroy,
+					Result:       api.ActionResultDestroyFailed,
+					Status:       api.ActionStatusFailed,
+					Message:      fmt.Sprintf("Destroy failed: %v", err),
+					StartedAt:    startTime,
+					TerminatedAt: &endedAt,
+				},
+			})
+			return err
+		}
 	}
 
 	// Delete config unit files
-	err = cb.deleteConfigUnit(payload)
+	err := cb.deleteConfigUnit(payload)
 	if err != nil {
 		// Send error status
 		endedAt := time.Now()
@@ -217,6 +233,9 @@ func (cb *CustomKubernetesBridge) Destroy(ctx api.BridgeContext, payload api.Bri
 
 // Finalize handles the finalize operation by delegating to the Kubernetes bridge
 func (cb *CustomKubernetesBridge) Finalize(ctx api.BridgeContext, payload api.BridgePayload) error {
+	if cb.saveOnly {
+		return nil
+	}
 	return cb.kubernetesBridge.Finalize(ctx, payload)
 }
 
