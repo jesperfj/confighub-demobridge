@@ -6,15 +6,11 @@
 package main
 
 import (
-	"context"
 	"log"
 	"os"
 
-	"github.com/confighub/sdk/bridge-worker/api"
-	"github.com/confighub/sdk/bridge-worker/lib"
-	"github.com/confighub/sdk/function"
-	funcApi "github.com/confighub/sdk/function/api"
-	"go.opentelemetry.io/otel/metric/noop"
+	function "github.com/confighub/sdk/function"
+	"github.com/confighub/sdk/worker"
 )
 
 func main() {
@@ -24,6 +20,9 @@ func main() {
 
 	// For your own logging, you can use standard log package as shown in this example
 	log.Printf("[INFO] Starting custom bridge worker...")
+
+	// Create bridge dispatcher
+	bridgeDispatcher := worker.NewBridgeDispatcher()
 
 	// Create custom bridge that wraps the standard Kubernetes bridge
 	baseDir := os.Getenv("CUSTOM_BRIDGE_DIR")
@@ -37,42 +36,28 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create custom bridge: %v", err)
 	}
+	bridgeDispatcher.RegisterBridge(customBridge)
 
 	// Create function executor with all standard functions
 	executor := function.NewStandardExecutor()
 
-	// Use lib.Worker directly with a no-op meter to work around
-	// https://github.com/confighubai/confighub/issues/3669
-	meter := noop.NewMeterProvider().Meter("")
-	worker := lib.New(os.Getenv("CONFIGHUB_URL"), os.Getenv("CONFIGHUB_WORKER_ID"), os.Getenv("CONFIGHUB_WORKER_SECRET")).
-		WithBridgeWorker(customBridge).
-		WithFunctionWorker(&functionWorkerAdapter{executor: executor}).
-		WithMetricsMeter(meter)
+	// The connector is the "engine" of the worker. You register bridges and functions with it.
+	// Then you start it and it connects to ConfigHub and offers its local capabilities to your ConfigHub org.
+	connector, err := worker.NewConnector(worker.ConnectorOptions{
+		WorkerID:         os.Getenv("CONFIGHUB_WORKER_ID"),
+		WorkerSecret:     os.Getenv("CONFIGHUB_WORKER_SECRET"),
+		ConfigHubURL:     os.Getenv("CONFIGHUB_URL"),
+		BridgeDispatcher: &bridgeDispatcher,
+		FunctionExecutor: executor,
+	})
 
-	log.Printf("[INFO] Starting worker...")
-	if err := worker.Start(context.Background()); err != nil {
-		log.Fatalf("Failed to start worker: %v", err)
-	}
-}
-
-// functionWorkerAdapter wraps FunctionExecutor to satisfy api.FunctionWorker
-type functionWorkerAdapter struct {
-	executor *function.FunctionExecutor
-}
-
-func (a *functionWorkerAdapter) Info() api.FunctionWorkerInfo {
-	return api.FunctionWorkerInfo{
-		SupportedFunctions: a.executor.RegisteredFunctions(),
-	}
-}
-
-func (a *functionWorkerAdapter) Invoke(ctx api.FunctionWorkerContext, req funcApi.FunctionInvocationRequest) (funcApi.FunctionInvocationResponse, error) {
-	resp, err := a.executor.Invoke(ctx.Context(), &req)
 	if err != nil {
-		return funcApi.FunctionInvocationResponse{}, err
+		log.Fatalf("Failed to create connector: %v", err)
 	}
-	if resp == nil {
-		return funcApi.FunctionInvocationResponse{}, nil
+
+	log.Printf("[INFO] Starting connector...")
+	err = connector.Start()
+	if err != nil {
+		log.Fatalf("Failed to start connector: %v", err)
 	}
-	return *resp, nil
 }

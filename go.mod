@@ -2,7 +2,7 @@ module github.com/confighub/confighub-demobridge
 
 go 1.25.0
 
-require github.com/confighub/sdk v0.1.1
+require github.com/confighub/sdk v0.1.2
 
 require (
 	cel.dev/expr v0.24.0 // indirect
